@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment
+.env
+**/.env
+
+# Claude / editor / OS
+.claude/
+.DS_Store
+.vscode/
+.idea/
+
+# Backend runtime artifacts
+backend/wal/*.log
+backend/data/dataset.csv
+
+# Frontend build output
+frontend/dist/
+frontend/.vite/
+
+# Logs
+*.log
+npm-debug.log*

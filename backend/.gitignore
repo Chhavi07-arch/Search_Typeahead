@@ -1,0 +1,4 @@
+node_modules/
+.env
+wal/*.log
+data/dataset.csv
