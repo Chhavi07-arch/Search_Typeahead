@@ -4,6 +4,7 @@
 
 import { Router } from "express";
 import { metrics } from "../services/metrics.js";
+import * as latency from "../services/latency.js";
 import * as batchBuffer from "../services/batchBuffer.js";
 import { config } from "../config.js";
 
@@ -13,6 +14,7 @@ router.get("/metrics", (_req, res) => {
   const buffered = batchBuffer.snapshot();
   return res.json({
     ...metrics.snapshot(),
+    suggestLatency: latency.stats(), // { count, avgMs, p50Ms, p95Ms, p99Ms, maxMs }
     pendingWrites: Object.keys(buffered).length,
     buffer: buffered,
     flushIntervalSeconds: config.flushIntervalSeconds,

@@ -11,6 +11,8 @@ import cron from "node-cron";
 
 import { config } from "./config.js";
 import { initSchema } from "./db.js";
+import { connectRedis } from "./services/redisClient.js";
+import * as latency from "./services/latency.js";
 import * as wal from "./services/wal.js";
 import * as batchBuffer from "./services/batchBuffer.js";
 
@@ -25,6 +27,18 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Measure /suggest latency (the latency-sensitive read path) for /metrics + reports.
+app.use((req, res, next) => {
+  if (req.path === "/suggest") {
+    const start = process.hrtime.bigint();
+    res.on("finish", () => {
+      const ms = Number(process.hrtime.bigint() - start) / 1e6;
+      latency.record(ms);
+    });
+  }
+  next();
+});
+
 // Mount all routes at the root.
 app.use(suggestRoute);
 app.use(searchRoute);
@@ -37,6 +51,9 @@ async function start() {
   // 1. Schema.
   await initSchema();
   console.log("[startup] database schema ready");
+
+  // 1b. Connect to Redis (the cache store). Non-fatal if unavailable.
+  await connectRedis();
 
   // 2. WAL recovery — rebuild the buffer from any log left by a previous crash.
   const recovered = await wal.recover();

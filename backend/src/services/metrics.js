@@ -6,6 +6,7 @@ const counters = {
   cacheMisses: 0,
   searchRequests: 0, // every POST /search
   dbWrites: 0,       // one per query row actually written during a flush
+  dbReads: 0,        // one per /suggest that falls through to PostgreSQL
 };
 
 export const metrics = {
@@ -21,6 +22,10 @@ export const metrics = {
   // Called by the batch buffer after a flush with the number of rows written.
   recordDbWrites(n) {
     counters.dbWrites += n;
+  },
+  // Called by /suggest when it has to read from PostgreSQL (a cache miss).
+  recordDbRead() {
+    counters.dbReads += 1;
   },
 
   snapshot() {
@@ -40,6 +45,7 @@ export const metrics = {
       cacheHitRate: Number(cacheHitRate.toFixed(2)),
       searchRequests: counters.searchRequests,
       dbWrites: counters.dbWrites,
+      dbReads: counters.dbReads,
       writeReduction: Number(Math.max(0, writeReduction).toFixed(2)),
     };
   },

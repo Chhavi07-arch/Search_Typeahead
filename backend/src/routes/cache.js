@@ -9,20 +9,20 @@ import { ringInfo } from "../services/consistentHash.js";
 
 const router = Router();
 
-router.get("/cache/debug", (req, res) => {
+router.get("/cache/debug", async (req, res) => {
   const prefix = (req.query.prefix ?? "").toString().trim().toLowerCase();
 
   // The core answer the assignment asks for: prefix -> node + hit status.
   let lookup = null;
   if (prefix.length > 0) {
-    const { node, cacheHit } = cache.peek(prefix);
+    const { node, cacheHit } = await cache.peek(prefix);
     lookup = { prefix, node, cacheHit };
   }
 
   return res.json({
     ...(lookup || {}),
     ring: ringInfo(),
-    contents: cache.inspect(),
+    contents: await cache.inspect(),
   });
 });
 
