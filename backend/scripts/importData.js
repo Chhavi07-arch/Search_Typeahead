@@ -1,11 +1,14 @@
 // Imports a CSV (query,count) into PostgreSQL.
 //
-//   node scripts/importData.js [path/to/file.csv]
+//   node scripts/importData.js [path/to/file.csv] [--reset]
 //
-// Default file is data/dataset.csv (run generateDataset.js first), falling back to
-// data/sample.csv if the generated file does not exist. Rows are upserted in
-// batches for speed. last_searched is spread across the recent past so trending
-// has variety to rank.
+// Default file is data/dataset.csv (run generateDataset.js or prepareAol.js first),
+// falling back to data/sample.csv if the generated file does not exist. Rows are
+// upserted in batches for speed. last_searched is spread across the recent past so
+// trending has variety to rank.
+//
+// Pass --reset to TRUNCATE the table first — use this when swapping to a different
+// dataset (e.g. from the synthetic set to AOL) so old rows don't linger.
 
 import fs from "fs";
 import path from "path";
@@ -15,8 +18,11 @@ import { pool, initSchema } from "../src/db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const reset = process.argv.includes("--reset");
+
 function resolveInput() {
-  const arg = process.argv[2];
+  // First non-flag argument is the file path.
+  const arg = process.argv.slice(2).find((a) => !a.startsWith("--"));
   if (arg) return path.resolve(arg);
   const generated = path.join(__dirname, "..", "data", "dataset.csv");
   if (fs.existsSync(generated)) return generated;
@@ -54,6 +60,12 @@ async function main() {
   }
 
   await initSchema();
+
+  if (reset) {
+    await pool.query("TRUNCATE search_queries RESTART IDENTITY");
+    console.log("Reset: existing rows cleared (TRUNCATE).");
+  }
+
   console.log(`Importing from ${inputPath} ...`);
 
   const now = Date.now();
