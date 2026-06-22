@@ -5,7 +5,8 @@ import axios from "axios";
 const client = axios.create({ baseURL: "/api" });
 
 export const api = {
-  suggest: (q) => client.get("/suggest", { params: { q } }).then((r) => r.data),
+  suggest: (q, ranking = "count") =>
+    client.get("/suggest", { params: { q, ranking } }).then((r) => r.data),
   search: (query) => client.post("/search", { query }).then((r) => r.data),
   trending: () => client.get("/trending").then((r) => r.data),
   metrics: () => client.get("/metrics").then((r) => r.data),

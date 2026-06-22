@@ -14,10 +14,11 @@ export default function SearchBox({ onSearched, onPrefixChange }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState(null); // last search result banner
+  const [ranking, setRanking] = useState("count"); // "count" (basic) | "recency" (enhanced)
 
   const debounceRef = useRef(null);
 
-  // Debounced suggestion fetching whenever the input changes.
+  // Debounced suggestion fetching whenever the input or ranking mode changes.
   useEffect(() => {
     onPrefixChange?.(value.trim().toLowerCase());
 
@@ -34,7 +35,7 @@ export default function SearchBox({ onSearched, onPrefixChange }) {
     setLoading(true);
     debounceRef.current = setTimeout(async () => {
       try {
-        const data = await api.suggest(q);
+        const data = await api.suggest(q, ranking);
         setItems(data.suggestions || []);
         setCached(!!data.cached);
         setOpen(true);
@@ -49,7 +50,7 @@ export default function SearchBox({ onSearched, onPrefixChange }) {
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(debounceRef.current);
-  }, [value, onPrefixChange]);
+  }, [value, ranking, onPrefixChange]);
 
   async function submitSearch(query) {
     const q = (query ?? value).trim();
@@ -87,9 +88,31 @@ export default function SearchBox({ onSearched, onPrefixChange }) {
 
   return (
     <section className="rounded-2xl border border-ink-600 bg-ink-800 p-6 shadow-lg">
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-400">
-        Search
-      </h2>
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+          Search
+        </h2>
+
+        {/* Ranking toggle — demonstrates basic (count) vs enhanced (recency) ordering. */}
+        <div className="flex items-center gap-1 rounded-lg border border-ink-600 bg-ink-900 p-1 text-xs">
+          {[
+            { id: "count", label: "By Count" },
+            { id: "recency", label: "Trending (recency)" },
+          ].map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => setRanking(opt.id)}
+              className={`rounded-md px-3 py-1.5 transition ${
+                ranking === opt.id
+                  ? "bg-accent text-white"
+                  : "text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="flex gap-3">
         <div className="relative flex-1">
@@ -142,6 +165,7 @@ export default function SearchBox({ onSearched, onPrefixChange }) {
 
       <p className="mt-3 text-xs text-slate-500">
         Tip: use ↑ / ↓ to navigate suggestions, Enter to search, Esc to close.
+        Toggle ranking to compare all-time popularity vs recency-aware ordering.
       </p>
     </section>
   );

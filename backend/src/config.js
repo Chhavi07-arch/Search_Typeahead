@@ -21,6 +21,9 @@ export const config = {
     database: process.env.PGDATABASE || "typeahead",
   },
 
+  // Redis connection URL (the cache store). Defaults to a local Redis server.
+  redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
+
   // Cache TTL — how long a cached suggestion list stays fresh (default 5 min).
   cacheTtlMs: Number(process.env.CACHE_TTL_MS) || 5 * 60 * 1000,
 
@@ -29,6 +32,14 @@ export const config = {
 
   // Maximum suggestions returned by /suggest.
   maxSuggestions: Number(process.env.MAX_SUGGESTIONS) || 10,
+
+  // Trending / recency-aware ranking tunables.
+  // recencyWeight (W): a freshly searched query is boosted up to (1 + W)x its count,
+  //   decaying back to 1x (its raw count) as it ages.
+  // trendingMinCount: a query must have at least this many searches to be eligible
+  //   for the Trending list — this stops one-off searches from dominating.
+  recencyWeight: Number(process.env.RECENCY_WEIGHT) || 3,
+  trendingMinCount: Number(process.env.TRENDING_MIN_COUNT) || 5,
 
   // The three simulated cache nodes that sit on the consistent-hash ring.
   cacheNodes: ["cacheNode1", "cacheNode2", "cacheNode3"],
