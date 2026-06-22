@@ -6,15 +6,20 @@ node_modules/
 .env
 **/.env
 
-# Claude / editor / OS
+# Local tooling / editor / OS
 .claude/
 .DS_Store
 .vscode/
 .idea/
+CLAUDE.md
 
 # Backend runtime artifacts
 backend/wal/*.log
 backend/data/dataset.csv
+
+# Raw datasets (large — keep out of git; download separately per README)
+backend/data/*.txt
+backend/data/aol/
 
 # Frontend build output
 frontend/dist/

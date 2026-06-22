@@ -16,8 +16,10 @@ function ensureDir() {
   fs.mkdirSync(path.dirname(walPath), { recursive: true });
 }
 
-// Append one search query as a single line. Synchronous so the durability
-// guarantee holds: the line is on disk before we acknowledge the search.
+// Append one search query as a single line. The write is synchronous so the line
+// is written to the log file before we acknowledge the search, which protects
+// against a process crash. (It is a plain append, not fsync'd, so a full OS/power
+// loss could still lose the very last lines — acceptable for this assignment.)
 export function append(query) {
   ensureDir();
   fs.appendFileSync(walPath, query + "\n", "utf8");
