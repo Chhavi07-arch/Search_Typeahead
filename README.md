@@ -1,333 +1,215 @@
 # Search Typeahead System
 
-A Google-autocomplete–style **search typeahead** system built for an HLD (High Level
-Design) assignment. It demonstrates low-latency suggestions, a simulated distributed
-cache with **consistent hashing**, **batch writes**, a simple **Write-Ahead Log (WAL)**
-with crash recovery, and **recency-aware trending** — all kept deliberately simple so it
-is easy to explain in a viva.
+A search autocomplete system, similar to what you see on Google or an e-commerce site.
+As you type, it suggests popular queries. You can submit a search, see what's trending, and
+the whole thing uses a cache so suggestions come back quickly.
 
-- **Frontend:** React + Vite + TailwindCSS + Axios (dark dashboard UI)
-- **Backend:** Node.js + Express
-- **Database:** PostgreSQL
-- **Helpers:** `node-cron` (batch flush), `csv-parser` (dataset import), `pg` (driver)
+This was built as a backend systems project, so most of the interesting work is on the
+server side: how query counts are stored, how suggestions are served fast with a cache,
+how the cache is split across nodes, and how write load on the database is kept low.
 
-> No Kafka, Redis, Elasticsearch, microservices, Docker orchestration, CQRS, or event
-> sourcing — by design.
+## Features
 
----
+- **Typeahead suggestions** – type a prefix, get up to 10 matching queries sorted by popularity.
+- **Trending searches** – a separate ranking that takes recent activity into account, not just all-time count.
+- **Batch writes** – searches are collected in memory and written to the database in batches instead of one write per search.
+- **WAL recovery** – every search is written to a log file first, so buffered searches survive a restart.
+- **Distributed cache simulation** – three logical cache nodes backed by Redis.
+- **Consistent hashing** – decides which cache node owns each prefix.
+- **Metrics dashboard** – cache hit rate, latency (including p95), DB reads/writes, and write reduction.
 
-## Table of Contents
-
-1. [Project Structure](#project-structure)
-2. [Prerequisites](#prerequisites)
-3. [Setup](#setup)
-4. [Running](#running)
-5. [API Documentation](#api-documentation)
-6. [How It Works](#how-it-works)
-   - [Consistent Hashing](#consistent-hashing)
-   - [Batch Writes](#batch-writes)
-   - [WAL (Write-Ahead Log)](#wal-write-ahead-log)
-   - [Trending](#trending)
-   - [Caching & TTL](#caching--ttl)
-7. [Tradeoffs](#tradeoffs)
-8. [Demo Script (for viva)](#demo-script-for-viva)
-
----
-
-## Project Structure
+## Architecture
 
 ```
-SearchTypeahead/
-├── README.md
-├── docs/architecture.md          # diagram + request-flow walkthroughs
-├── backend/
-│   ├── .env.example
-│   ├── data/sample.csv           # small ready-to-use dataset
-│   ├── scripts/
-│   │   ├── generateDataset.js    # builds a 100k-row CSV
-│   │   └── importData.js         # imports a CSV into PostgreSQL
-│   ├── wal/                      # search.log lives here at runtime
-│   └── src/
-│       ├── index.js              # server entry (recovery + cron + routes)
-│       ├── config.js  db.js
-│       ├── services/             # consistentHash, cache, wal, batchBuffer, metrics
-│       └── routes/               # suggest, search, trending, cache, metrics, health
-└── frontend/
-    └── src/
-        ├── App.jsx  api.js
-        └── components/           # Header, SearchBox, Suggestions, Trending, Metrics, CacheInfo
+React UI  ->  Express backend  ->  Redis cache (3 logical nodes, consistent hashing)
+                     |
+                     +--> in-memory batch buffer --(flush every 30s)--> PostgreSQL
+                     |
+                     +--> WAL file (replayed on startup)
 ```
 
----
+- **Frontend** – React + Vite + Tailwind. Calls the backend with Axios.
+- **Backend** – Node.js + Express. All the logic lives here.
+- **Database** – PostgreSQL. One table, `search_queries(query, count, last_searched)`, with a prefix index.
+- **Cache** – Redis. Stores suggestion results per prefix with a 5-minute TTL.
+- **WAL** – an append-only log file (`backend/wal/search.log`) used to recover buffered searches.
+- **Batch buffer** – an in-memory map that aggregates search counts before writing.
 
-## Prerequisites
+There is more detail, including diagrams, in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-- **Node.js 18+** (uses ES modules and `node --watch`)
-- **PostgreSQL 13+** running locally
+## Dataset
 
----
+**Source:** the [AOL search query dataset](https://www.kaggle.com/datasets/dineshydv/aol-user-search-data)
+(real anonymized search logs).
 
-## Setup
+**Why this one:** the project is about *search* queries, so a real set of search queries
+fits better than product names or page titles. It's large, it has lots of shared prefixes
+(good for testing autocomplete), and the counts can be derived from the data.
 
-### 1. Create the database
-
-```bash
-createdb typeahead
-# or, inside psql:  CREATE DATABASE typeahead;
-```
-
-### 2. Configure the backend
+**How it's loaded:** the raw AOL files are one row per search *event* (they don't come with
+counts), so `prepare:aol` aggregates them — it counts how many times each query appears and
+keeps the top 150,000 by frequency. That produces a `query,count` CSV, which `import` loads
+into PostgreSQL.
 
 ```bash
 cd backend
-cp .env.example .env          # edit credentials if your Postgres differs
-npm install
+npm run prepare:aol -- data/user-ct-test-collection-02.txt   # raw logs -> data/dataset.csv
+npm run import -- --reset                                     # load into PostgreSQL
 ```
 
-### 3. Load a dataset
+If you don't want to download the AOL files, there's also `npm run generate` which builds a
+synthetic 100k-row CSV in the same format.
 
-Either use the bundled sample, or generate a large one.
-
-```bash
-# Option A — quick start with the bundled sample (~37 rows)
-npm run import -- data/sample.csv
-
-# Option B — generate 100,000 rows, then import them
-npm run generate              # writes backend/data/dataset.csv
-npm run import                # imports dataset.csv (falls back to sample.csv)
-```
-
-The schema (`search_queries` table + prefix index) is created automatically on first
-import and on server start.
-
-### 4. Install the frontend
-
-```bash
-cd ../frontend
-npm install
-```
-
----
-
-## Running
-
-Open two terminals.
-
-**Backend** (port 4000):
-
-```bash
-cd backend
-npm start          # or: npm run dev   (auto-restart on change)
-```
-
-**Frontend** (port 5173):
-
-```bash
-cd frontend
-npm run dev
-```
-
-Visit **http://localhost:5173**. The Vite dev server proxies `/api/*` to the backend,
-so no CORS configuration is needed.
-
----
-
-## API Documentation
+## APIs
 
 Base URL: `http://localhost:4000`
 
-### `GET /suggest?q=<prefix>`
+### GET /suggest?q=&lt;prefix&gt;&ranking=&lt;count|recency&gt;
 
-Returns up to 10 suggestions that start with the prefix, ordered by popularity.
-Cached per prefix on the consistent-hash ring.
+Up to 10 suggestions starting with the prefix. `ranking=count` (default) sorts by all-time
+count; `ranking=recency` sorts by the recency-aware score.
 
 ```bash
-curl "http://localhost:4000/suggest?q=iph"
+curl "http://localhost:4000/suggest?q=goo"
 ```
-
 ```json
-{
-  "prefix": "iph",
-  "suggestions": ["iphone", "iphone 15", "iphone charger", "iphone case"],
-  "cached": false
-}
+{ "prefix": "goo", "ranking": "count",
+  "suggestions": ["google", "google.com", "google earth"], "cached": false }
 ```
 
-Empty/whitespace input returns `{ "prefix": "", "suggestions": [], "cached": false }`.
+### POST /search
 
-### `POST /search`
-
-Records a search. Goes through the WAL and batch buffer — it does **not** write to the
-DB directly.
+Records a search. Returns a dummy response; the count is updated through the batch buffer,
+not written immediately.
 
 ```bash
-curl -X POST http://localhost:4000/search \
-  -H "Content-Type: application/json" \
-  -d '{"query":"iphone"}'
+curl -X POST http://localhost:4000/search -H "Content-Type: application/json" -d '{"query":"google"}'
 ```
-
 ```json
 { "message": "Searched" }
 ```
 
-### `GET /trending`
+### GET /trending
 
-Top 10 queries by recency-aware score (see [Trending](#trending)).
-
-```json
-{
-  "trending": [
-    {
-      "query": "iphone",
-      "count": 100000,
-      "lastSearched": "2026-06-20T10:00:00.000Z",
-      "hoursSinceLastSearch": 0.5,
-      "score": 106666.67
-    }
-  ]
-}
-```
-
-### `GET /cache/debug?prefix=<prefix>`
-
-Shows which cache node owns a prefix, whether it is currently cached, the ring layout,
-and a snapshot of every node's contents.
+Top 10 queries by the recency-aware score, excluding queries that haven't been searched
+enough times yet.
 
 ```json
-{
-  "prefix": "iph",
-  "node": "cacheNode2",
-  "cacheHit": true,
-  "ring": { "nodes": ["cacheNode1","cacheNode2","cacheNode3"], "virtualNodesPerNode": 50, "totalPoints": 150, "pointsPerNode": { "cacheNode1": 50, "cacheNode2": 50, "cacheNode3": 50 } },
-  "contents": { "ttlMs": 300000, "nodes": { "cacheNode1": { "size": 0, "keys": [] }, "...": {} } }
-}
+{ "minCount": 5, "recencyWeight": 3,
+  "trending": [ { "query": "google", "count": 32396, "hoursSinceLastSearch": 0.5, "score": 97188.0 } ] }
 ```
 
-### `GET /metrics`
+### GET /cache/debug?prefix=&lt;prefix&gt;
+
+Shows which cache node owns a prefix and whether it's currently cached.
 
 ```json
-{
-  "cacheHits": 12,
-  "cacheMisses": 4,
-  "cacheHitRate": 75.0,
-  "searchRequests": 40,
-  "dbWrites": 6,
-  "writeReduction": 85.0,
-  "pendingWrites": 2,
-  "buffer": { "iphone": 2 },
-  "flushIntervalSeconds": 30
-}
+{ "prefix": "goo", "node": "cacheNode3", "cacheHit": true,
+  "ring": { "nodes": ["cacheNode1","cacheNode2","cacheNode3"], "virtualNodesPerNode": 50, "totalPoints": 150 },
+  "contents": { "ttlMs": 300000, "nodes": { "cacheNode1": { "size": 0, "keys": [] } } } }
 ```
 
-### `GET /health`
+### GET /metrics
+
+```json
+{ "cacheHits": 12, "cacheMisses": 4, "cacheHitRate": 75.0,
+  "searchRequests": 40, "dbWrites": 6, "dbReads": 4, "writeReduction": 85.0,
+  "suggestLatency": { "count": 1000, "avgMs": 1.17, "p50Ms": 1.05, "p95Ms": 2.04 },
+  "pendingWrites": 2, "flushIntervalSeconds": 30 }
+```
+
+### GET /health
 
 ```json
 { "status": "ok", "dbConnected": true, "uptimeSeconds": 123 }
 ```
 
----
+## Running Locally
 
-## How It Works
+### Requirements
+- Node.js 18+
+- PostgreSQL 13+
+- Redis 6+
 
-### Consistent Hashing
-
-File: `backend/src/services/consistentHash.js`
-
-Three simulated cache nodes (`cacheNode1`, `cacheNode2`, `cacheNode3`) are placed on a
-numeric ring. Each node is placed at **50 virtual points** computed with a deterministic
-FNV-1a string hash. To find the owner of a prefix, we hash the prefix to a point on the
-ring and walk clockwise to the first node point we meet.
-
-- **Why a ring?** Adding/removing a node only remaps the keys near that node, not all
-  keys (unlike `hash(key) % N`).
-- **Why virtual nodes?** They spread each physical node around the ring so keys are
-  distributed evenly instead of clumping.
-
-The same prefix therefore always maps to the same node — visible in `/cache/debug` and
-the **Cache** panel of the UI.
-
-### Batch Writes
-
-Files: `backend/src/services/batchBuffer.js`, scheduled in `backend/src/index.js`
-
-`POST /search` increments an in-memory counter, e.g. `{ "iphone": 5, "java tutorial": 3 }`.
-Every **30 seconds** a `node-cron` job flushes the buffer: each distinct query becomes a
-single upsert `INSERT … ON CONFLICT (query) DO UPDATE SET count = count + delta`.
-
-This turns *N* searches of the same term into **one** DB write. The
-`/metrics` endpoint reports `searchRequests`, `dbWrites`, and the derived
-`writeReduction = (searchRequests − dbWrites) / searchRequests`.
-
-### WAL (Write-Ahead Log)
-
-File: `backend/src/services/wal.js`
-
-Before a search touches the in-memory buffer it is appended to `backend/wal/search.log`
-(one query per line, synchronous write). The buffer lives only in memory, so if the
-process crashes before the next flush those increments would be lost — the WAL prevents
-that:
-
-- **On startup**, `recover()` reads `search.log` and replays each line back into the
-  buffer.
-- **After a successful flush**, the log is truncated (those writes are now durable in
-  PostgreSQL).
-
-Intentionally minimal: no LSNs, no checkpoints, no undo logs.
-
-### Trending
-
-File: `backend/src/routes/trending.js`
-
-Each row stores `count` and `last_searched`. Trending uses:
-
-```
-score = count + (10000 / (hours_since_last_search + 1))
+### 1. Start PostgreSQL and Redis
+```bash
+# macOS (Homebrew)
+brew services start postgresql@15
+brew services start redis
+createdb typeahead
 ```
 
-- A query searched **just now** gets a large recency boost (`+10000` at 0 hours).
-- As it ages, the boost decays toward 0 and only raw `count` remains.
+### 2. Backend
+```bash
+cd backend
+cp .env.example .env        # edit if your Postgres/Redis settings differ
+npm install
+```
 
-This lets a recently-searched niche query temporarily out-rank an old popular one,
-which is exactly what you demonstrate in the viva.
+### 3. Load the dataset
+```bash
+# real AOL data (see the Dataset section for the download)
+npm run prepare:aol -- data/user-ct-test-collection-02.txt
+npm run import -- --reset
+# or, without downloading anything:
+# npm run generate && npm run import -- --reset
+```
 
-### Caching & TTL
+### 4. Run
+```bash
+# terminal 1
+cd backend && npm start
+# terminal 2
+cd frontend && npm install && npm run dev
+```
 
-File: `backend/src/services/cache.js`
+Open http://localhost:5173. Vite proxies API calls to the backend, so there's nothing else
+to configure.
 
-Each cache node is a JS `Map` of `prefix → { suggestions, createdAt }`. Entries expire
-after **5 minutes** (`CACHE_TTL_MS`). Expired entries are treated as a miss and evicted
-on access. Hits/misses feed the metrics.
+## Design Choices
 
----
+**Why a cache.** Most typeahead traffic is repeated prefixes. Serving those from Redis
+instead of hitting PostgreSQL every time keeps suggestions fast and takes load off the
+database. A 5-minute TTL keeps cached results from going stale forever.
 
-## Tradeoffs
+**Why consistent hashing.** With three cache nodes, the naive approach is `hash(key) % 3`,
+but that remaps almost every key if a node is added or removed. A hash ring only remaps the
+keys near the change. Virtual nodes (50 per node) spread each node around the ring so the
+load is more even. The owning node becomes part of the Redis key, so you can actually see
+the partitioning.
 
-- **In-memory cache & buffer** are simple and fast but live in a single process; a crash
-  loses cache (fine — it rebuilds) and would lose the buffer (mitigated by the WAL).
-- **Batching adds latency to durability**: a search isn't in the DB until the next flush
-  (≤30s). The WAL bounds data loss to "nothing", but trending/counts lag by one cycle.
-- **Simulated cache nodes** run in one process — this shows the *algorithm* (consistent
-  hashing) without the operational complexity of real distributed caches (Redis, etc.),
-  which the assignment explicitly excludes.
-- **`LIKE 'prefix%'`** with a `text_pattern_ops` index is simple and fast for prefix
-  matches; a dedicated search engine would scale further but is out of scope.
-- **Single writer** for flushes keeps the buffer logic trivial and avoids lock
-  contention, at the cost of horizontal write scaling.
+**Why batch writes.** Searches are frequent and the same query repeats a lot. Writing to
+the database on every search is wasteful. Collecting counts in memory and flushing every 30
+seconds turns many searches into a single upsert per query.
 
----
+**Why a WAL.** The batch buffer lives in memory, so a crash would lose it. Writing each
+search to a log file first means the buffer can be rebuilt on the next startup.
 
-## Demo Script (for viva)
+## Trade-offs
 
-1. **Typeahead + cache:** type `iph` in the UI. First request is a **cache miss** (from
-   DB); type it again (or check `/cache/debug?prefix=iph`) and it's a **cache hit**.
-2. **Consistent hashing:** the Cache panel highlights which node owns `iph`. Try other
-   prefixes and see them land on different nodes deterministically.
-3. **Batch writes:** search the same term several times; `pendingWrites` in Metrics goes
-   up while `dbWrites` stays flat. After ~30s a flush runs, `dbWrites` ticks up by the
-   number of distinct queries, and `writeReduction` rises.
-4. **WAL recovery:** search a few terms, then **stop the backend before** a flush. Inspect
-   `backend/wal/search.log` — your searches are there. Restart: the log says
-   `WAL recovery: replayed N buffered search(es)`, and after the next flush they reach
-   the DB.
-5. **Trending:** search a niche query repeatedly and watch it climb the Trending list via
-   the recency boost, then decay over time.
+- The cache and batch buffer are simple and fast, but the buffer is in memory — the WAL is
+  what makes it safe across restarts.
+- Batching delays durability: a search isn't in the database until the next flush (up to 30
+  seconds later). The WAL bounds the loss, but counts lag by one cycle.
+- The three cache nodes run inside one Redis instance (the node name is a key prefix). The
+  hashing algorithm is real; using three separate Redis servers would be the production
+  version.
+- Trending uses a recency multiplier on top of count, so it favors queries that already
+  have some popularity. A brand-new query needs a few searches before it can trend, which is
+  intentional (it stops one-off searches from dominating).
+
+## Performance
+
+Measured locally with the 150k-row dataset (see [PERFORMANCE.md](PERFORMANCE.md) for the
+full report and how to reproduce it with `npm run benchmark`):
+
+- Suggest latency: server-side **p95 ≈ 2 ms**, average ≈ 1 ms (cache hits).
+- Cache hit rate: **~93%** in a mixed benchmark run.
+- Batch writes: **100 searches for the same query → 1 database write**.
+
+## Future Improvements
+
+- Run the cache nodes as separate Redis instances instead of one.
+- Make the WAL flush race-free (handle searches that arrive during a flush).
+- Use the real query timestamps from the dataset instead of spreading `last_searched` on import.
+- Add a small set of automated tests.
